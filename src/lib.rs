@@ -1,25 +1,26 @@
-use core::ops::IndexMut;
 use futures::sink::Sink;
 use futures::{Async, AsyncSink};
 
 type StartSend<T, E> = Result<AsyncSink<T>, E>;
 type Poll<T, E> = Result<Async<T>, E>;
 
-pub struct Balancer<List, Item, Error>
+pub struct Balancer<T, Item, Error>
 where
-    List: IndexMut<usize, Output = Sink<SinkItem = Item, SinkError = Error>>,
+    T: Sink<SinkItem = Item, SinkError = Error>,
 {
-    n: usize,
     i: usize,
-    list: List,
+    v: Vec<T>
 }
 
-impl<List, Item, Error> Balancer<List, Item, Error>
+impl<T, Item, Error> Balancer<T, Item, Error>
 where
-    List: IndexMut<usize, Output = Sink<SinkItem = Item, SinkError = Error>>,
+    T: Sink<SinkItem = Item, SinkError = Error>,
 {
-    pub fn new(n: usize, list: List) -> Balancer<List, Item, Error> {
-        Balancer { i: 0, n, list }
+    pub fn new(v: Vec<T>) -> Balancer<T, Item, Error> {
+        Balancer {
+            i: 0,
+            v,
+        }
     }
 }
 
@@ -37,9 +38,9 @@ where
 //     }
 // }
 
-impl<List, Item, Error> Sink for Balancer<List, Item, Error>
+impl<T, Item, Error> Sink for Balancer<T, Item, Error>
 where
-    List: IndexMut<usize, Output = Sink<SinkItem = Item, SinkError = Error>>,
+    T: Sink<SinkItem = Item, SinkError = Error>,
 {
     type SinkItem = Item;
     type SinkError = Error;
@@ -48,9 +49,10 @@ where
         &mut self,
         mut item: Self::SinkItem,
     ) -> StartSend<Self::SinkItem, Self::SinkError> {
-        for _ in 0..self.n {
-            let sink = &mut self.list[self.i];
-            self.i += 1;
+        let n = self.v.len();
+        for _ in 0..(self.v.len()) {
+            let sink = &mut self.v[self.i];
+            self.i = (self.i + 1) % n;
 
             match sink.start_send(item) {
                 Ok(AsyncSink::NotReady(rejected_item)) => {
@@ -67,10 +69,11 @@ where
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
         // TODO: does it make sense to use/increment i here?
+        let n = self.v.len();
         let mut all_ready = true;
-        for _ in 0..self.n {
-            let sink = &mut self.list[self.i];
-            self.i += 1;
+        for _ in 0..(self.v.len()) {
+            let sink = &mut self.v[self.i];
+            self.i = (self.i + 1) % n;
 
             all_ready = sink.poll_complete()?.is_ready() && all_ready;
         }
@@ -103,6 +106,7 @@ mod tests {
             balanced.push(tx);
             folded.push(rx.fold(0, |a, b| ok(a+b)))
         }
-        let balancer = Balancer::new(balanced.len(), balanced);
+        let balancer = Balancer::new(balanced);
+        // sink_rx.forward(balancer);
     }
 }
