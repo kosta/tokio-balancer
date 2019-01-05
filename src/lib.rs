@@ -9,7 +9,7 @@ where
     T: Sink<SinkItem = Item, SinkError = Error>,
 {
     i: usize,
-    v: Vec<T>
+    v: Vec<T>,
 }
 
 impl<T, Item, Error> Balancer<T, Item, Error>
@@ -17,10 +17,7 @@ where
     T: Sink<SinkItem = Item, SinkError = Error>,
 {
     pub fn new(v: Vec<T>) -> Balancer<T, Item, Error> {
-        Balancer {
-            i: 0,
-            v,
-        }
+        Balancer { i: 0, v }
     }
 }
 
@@ -88,25 +85,44 @@ where
 #[cfg(test)]
 mod tests {
 
-    use futures::stream::Stream;
-    use futures::future::ok;
-    use futures::sync::mpsc::channel;
     use super::Balancer;
+    use futures::future::{ok, join_all};
+    use futures::stream::Stream;
+    use futures::sync::mpsc::channel;
+    use futures::sync::mpsc::SendError;
+    use futures::Future;
+    use tokio::runtime::Runtime;
 
     const BUF_SIZE: usize = 1024;
     const N: usize = 8;
+    const NUM_MSGS_PER: usize = 32 * BUF_SIZE;
+    const NUM_MSGS: usize = NUM_MSGS_PER * N;
 
     #[test]
     fn it_works() {
-        let (sink_tx, sink_rx) = channel::<u32>(BUF_SIZE);
         let mut balanced = Vec::new();
         let mut folded = Vec::new();
         for _ in 0..N {
-            let (tx, rx) = channel::<u32>(BUF_SIZE);
+            let (tx, rx) = channel::<usize>(BUF_SIZE);
             balanced.push(tx);
-            folded.push(rx.fold(0, |a, b| ok(a+b)))
+            folded.push(rx.fold(0, |a, b| ok(a + b)))
         }
         let balancer = Balancer::new(balanced);
-        // sink_rx.forward(balancer);
+
+        let mut runtime = Runtime::new().unwrap();
+
+        runtime.spawn(
+            futures::stream::iter_ok::<_, SendError<usize>>(std::iter::repeat(1).take(NUM_MSGS))
+                .forward(balancer)
+                .map(|_| ()) // we're not interested in getting back the Forward result
+                .map_err(|e| panic!("balance error: {}", e)),
+        );
+
+        let folded: Vec<usize> = runtime.block_on(join_all(folded)).unwrap();
+        for sum in folded {
+            assert_eq!(NUM_MSGS_PER, sum);
+        }
+
+        runtime.shutdown_on_idle();
     }
 }
