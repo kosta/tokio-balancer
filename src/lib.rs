@@ -65,12 +65,12 @@ where
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        // TODO: does it make sense to use/increment i here?
         let n = self.v.len();
         let mut all_ready = true;
+        let mut i = self.i;
         for _ in 0..(self.v.len()) {
-            let sink = &mut self.v[self.i];
-            self.i = (self.i + 1) % n;
+            let sink = &mut self.v[i];
+            i = (i + 1) % n;
 
             all_ready = sink.poll_complete()?.is_ready() && all_ready;
         }
@@ -125,4 +125,6 @@ mod tests {
 
         runtime.shutdown_on_idle();
     }
+
+
 }
